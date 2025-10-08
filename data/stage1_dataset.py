@@ -20,7 +20,7 @@ class Stage1Dataset(Dataset):
         data_root: str,
         mode: str = "train",
         target_clips: int = 32,
-        feature_dim: int = 2048,
+        feature_dim: int = 1024,
     ):
         """
         Args:
@@ -28,7 +28,7 @@ class Stage1Dataset(Dataset):
             data_root: Root directory của new_youtube dataset
             mode: 'train' hoặc 'test'
             target_clips: Số clips chuẩn hoá (N=32)
-            feature_dim: Dimension của features (2048)
+            feature_dim: Dimension của features (1024)
         """
         self.feature_dir = feature_dir
         self.data_root = data_root
@@ -86,26 +86,17 @@ class Stage1Dataset(Dataset):
         return video_data
 
     def _uniform_grouping_average(self, features: np.ndarray) -> np.ndarray:
-        """
-        Uniform grouping + averaging để chuẩn hoá về target_clips
 
-        Args:
-            features: (M, feature_dim) - M clips variable
-
-        Returns:
-            normalized_features: (target_clips, feature_dim)
-        """
         M, feature_dim = features.shape
 
         if M == self.target_clips:
             return features
         elif M < self.target_clips:
-            # Upsample by repeating
             indices = np.linspace(0, M - 1, self.target_clips).astype(int)
             return features[indices]
         else:
             # Downsample by grouping và averaging
-            normalized_features = np.zeros((self.target_clips, feature_dim))
+            normalized_features = np.zeros((self.target_clips, feature_dim)) # (32, 1024) 
 
             group_size = M / self.target_clips
 
@@ -114,46 +105,37 @@ class Stage1Dataset(Dataset):
                 end_idx = int((i + 1) * group_size)
 
                 # Average features trong group
-                if end_idx <= M:
+                if end_idx <= M: 
                     group_features = features[start_idx:end_idx]
                 else:
                     group_features = features[start_idx:]
 
                 normalized_features[i] = np.mean(group_features, axis=0)
-
             return normalized_features
 
     def __len__(self):
         return len(self.video_data)
 
     def __getitem__(self, idx):
-        """
-        Returns:
-            features: tensor [target_clips, feature_dim] - (32, 2048)
-            label: int (0 hoặc 1) - video level label
-        """
+        """Simplified vì features đã có đúng shape (32, feature_dim)"""
         video_info = self.video_data[idx]
 
         try:
-            # Load features
-            features = np.load(video_info["feature_file"])  # (M, feature_dim)
+            # Load features (đã có shape (32, feature_dim))
+            features = np.load(video_info["feature_file"])  # (32, 1024)
 
-            # Uniform grouping + averaging
-            normalized_features = self._uniform_grouping_average(features)
+            # Không cần _uniform_grouping_average nữa!
+            # Paper method đã đảm bảo đúng shape
 
-            # Convert to tensor
-            features_tensor = torch.from_numpy(normalized_features).float()
+            features_tensor = torch.from_numpy(features).float()
             label_tensor = torch.tensor(video_info["label"], dtype=torch.long)
 
             return features_tensor, label_tensor
 
         except Exception as e:
             print(f"Error loading {video_info['video_name']}: {str(e)}")
-
-            # Return dummy data
             dummy_features = torch.zeros(self.target_clips, self.feature_dim)
             dummy_label = torch.tensor(0, dtype=torch.long)
-
             return dummy_features, dummy_label
 
 
@@ -162,7 +144,7 @@ def create_stage1_dataloaders(
     data_root: str,
     batch_size: int = 8,
     target_clips: int = 32,
-    feature_dim: int = 2048,
+    feature_dim: int = 1024,
     num_workers: int = 2,
 ) -> Tuple[DataLoader, DataLoader]:
     """
@@ -222,13 +204,13 @@ if __name__ == "__main__":
             data_root=data_root,
             mode="train",
             target_clips=32,
-            feature_dim=2048,
+            feature_dim=1024,
         )
 
         if len(dataset) > 0:
             # Test single sample
             features, label = dataset[0]
-            print(f"Features shape: {features.shape}")  # Should be (32, 2048)
+            print(f"Features shape: {features.shape}")  # Should be (32, 1024)
             print(f"Label: {label}")
 
             # Test dataloader
@@ -244,7 +226,7 @@ if __name__ == "__main__":
 
             # Test batch
             for features_batch, labels_batch in train_loader:
-                print(f"Batch features: {features_batch.shape}")  # (B, 32, 2048)
+                print(f"Batch features: {features_batch.shape}")  # (B, 32, 1024)
                 print(f"Batch labels: {labels_batch.shape}")  # (B,)
                 break
         else:

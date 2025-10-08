@@ -57,7 +57,7 @@ class Config:
     # Model parameters
     backbone_type = "r2plus1d_18"  # For I3D feature extraction
     i3d_pretrained = True
-    feature_dim = 2048  # I3D mix5c spatial averaged features
+    feature_dim = 1024  # R(2+1)D pooled features used in dataset
 
     # MTN parameters
     hidden_dim = 512

@@ -1,7 +1,4 @@
-
-
 import torch
-import torch.nn as nn
 import cv2
 import numpy as np
 import os
@@ -10,7 +7,6 @@ from tqdm import tqdm
 import argparse
 from torchvision import transforms
 from PIL import Image
-from pathlib import Path
 
 from models.r3d_backbone import R2Plus1DBackbone
 
@@ -43,67 +39,73 @@ class I3DFeatureExtractor:
 
         print(f"I3D Feature Extractor initialized on {self.device}")
 
-    def extract_video_features(self, video_path, clip_length=32, stride=16):
-        """
-        Extract features từ 1 video
-
-        Args:
-            video_path: Path to video file
-            clip_length: T=32 frames per clip
-            stride: Stride between clips
-
-        Returns:
-            features: (num_clips, 2048) numpy array
-        """
+    def extract_video_features(self, video_path, target_clips=32):
+        """Paper-compliant feature extraction"""
+        
         # Load video
         cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            print(f"Cannot open video: {video_path}")
-            return None
-
-        # Read all frames
         frames = []
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
             frames.append(frame)
-        cap.release() 
-
-        if len(frames) < clip_length:
-            print(f"Video too short: {video_path} ({len(frames)} frames)")
+        cap.release()
+        
+        total_frames = len(frames)
+        if total_frames < 1:
             return None
-
-        # Extract clips
+        
         clip_features = []
-
-        for start_idx in range(0, len(frames) - clip_length + 1, stride): # duyệt qua các frame của video với bước nhảy stride 
-            clip_frames = frames[start_idx : start_idx + clip_length]
-
-            # Process clip
-            processed_clip = self._process_clip(clip_frames)
+        
+        for i in range(target_clips):
+            # Calculate segment boundaries
+            start_ratio = i / target_clips
+            end_ratio = (i + 1) / target_clips
+            
+            start_idx = int(start_ratio * total_frames)
+            end_idx = int(end_ratio * total_frames)
+            
+            # Handle edge case
+            if start_idx >= total_frames:
+                start_idx = total_frames - 1
+            if end_idx > total_frames:
+                end_idx = total_frames
+            if start_idx == end_idx:
+                end_idx = start_idx + 1
+                
+            # Extract segment frames
+            segment_frames = frames[start_idx:end_idx]
+            
+            # Prepare 32 frames for I3D (paper uses T=32)
+            if len(segment_frames) < 32:
+                # Repeat frames in segment
+                repeated_frames = []
+                for j in range(32):
+                    frame_idx = j % len(segment_frames)
+                    repeated_frames.append(segment_frames[frame_idx])
+                final_frames = repeated_frames
+            else:
+                # Sample 32 frames from segment
+                indices = np.linspace(0, len(segment_frames)-1, 32).astype(int)
+                final_frames = [segment_frames[idx] for idx in indices]
+            
+            # Process and extract features
+            processed_clip = self._process_clip(final_frames)
             if processed_clip is not None:
-                # Extract I3D features
                 with torch.no_grad():
                     features = self.model(processed_clip)
-
-                    final_features = features["final_level"]  # (1, 1024, T', H', W')
-
-                
-                    pooled_features = torch.mean(
-                        final_features, dim=[3, 4]
-                    )  
-                    # Temporal average pooling
-                    pooled_features = torch.mean(pooled_features, dim=2)  # (1, 1024)
-
+                    final_features = features["final_level"]
+                    pooled_features = torch.mean(final_features, dim=[3, 4])
+                    pooled_features = torch.mean(pooled_features, dim=2)
                     clip_features.append(pooled_features.cpu().numpy())
-
-        if len(clip_features) == 0:
+        
+        if len(clip_features) != target_clips:
+            print(f"Warning: Expected {target_clips} clips, got {len(clip_features)}")
             return None
-
-        # Stack all clip features
-        video_features = np.vstack(clip_features)  # (num_clips, 1024)
-
+        
+        # đảm bảo đúng shape (32, feature_dim) 
+        video_features = np.vstack(clip_features)  # (32, 1024)
         return video_features
 
     def _process_clip(self, frames):
@@ -134,15 +136,16 @@ class I3DFeatureExtractor:
 
 
 def extract_dataset_features(
-    data_root=None, output_dir=None, clip_length=32, stride=16
+    data_root=None, output_dir=None, target_clips=32
 ):
-    """Extract features cho toàn bộ dataset với auto-detection"""
+    """Extract features cho toàn bộ dataset với uniform segmentation"""
 
     # Auto-detect paths if not provided
     if data_root is None:
         data_root = "./new_youtube"
-        if data_root is None:
+        if not os.path.exists(data_root):
             print("không tìm thấy vị trí dataset!")
+            return False
         else:
             print(f"Found dataset at: {data_root}")
 
@@ -186,9 +189,9 @@ def extract_dataset_features(
             continue
 
         try:
-            # Extract features
+            # ✅ FIXED: Use uniform segmentation
             features = extractor.extract_video_features(
-                video_path, clip_length=clip_length, stride=stride
+                video_path, target_clips=target_clips
             )
 
             if features is not None:
@@ -203,7 +206,9 @@ def extract_dataset_features(
             failed += 1
 
     print(f"Feature extraction completed!")
+    print(f"Successful: {successful}, Failed: {failed}")
     print(f"Features saved in: {output_dir}")
+    return successful > 0  # ✅ Return success status
 
 
 def main():
@@ -218,31 +223,25 @@ def main():
         "--output_dir",
         type=str,
         default=None,
-        help="Output directory for features (auto-detect if not specified)",
+        help="Output directory for features (auto-detect if not specified)",    
     )
     parser.add_argument(
-        "--clip_length",
+        "--target_clips",  # ✅ Changed from clip_length
         type=int,
         default=32,
-        help="Number of frames per clip (paper default: 32)",
-    )
-    parser.add_argument(
-        "--stride",
-        type=int,
-        default=16,
-        help="Stride between clips (paper default: 16)",
+        help="Number of clips per video (paper default: 32)",
     )
 
     args = parser.parse_args()
 
-    print("I3D Feature Extraction")
+    print("🚀 I3D Feature Extraction for Paper 2209.11477v1")
+    print("=" * 50)
 
     try:
         success = extract_dataset_features(
             data_root=args.data_root,
             output_dir=args.output_dir,
-            clip_length=args.clip_length,
-            stride=args.stride,
+            target_clips=args.target_clips,  # ✅ Fixed parameter
         )
 
         if success:

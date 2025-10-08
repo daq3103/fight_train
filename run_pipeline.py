@@ -8,7 +8,7 @@ import argparse
 import time
 from datetime import datetime
 
-from extract_i3d_features import extract_all_features
+from extract_i3d_features import extract_dataset_features
 from train_stage1 import Stage1Trainer
 from train_stage2 import Stage2Trainer
 from data.stage1_dataset import create_stage1_dataloaders
@@ -43,26 +43,19 @@ def run_feature_extraction(config, overwrite=False):
         )
         if feature_files > 0:
             print(
-                f"Found {feature_files} existing feature files in {config.feature_dir}"
+                f"Found {feature_files} existing feature files in {config.feature_dir}. Skipping extraction (use --force_retrain to overwrite)."
             )
-            response = input("Skip feature extraction? (y/n): ").strip().lower()
-            if response == "y":
-                print("Skipping feature extraction...")
-                return True
+            return True
 
     print(f"Extracting features from videos in {config.data_root}...")
     print(f"Output directory: {config.feature_dir}")
-    print(f"Clip length: {config.clip_length_frames} frames")
-    print(f"Temporal stride: {config.temporal_stride}")
+    print(f"Target clips: {config.num_clips_stage1}")
 
     try:
-        success = extract_all_features(
-            input_dir=config.data_root,
+        success = extract_dataset_features(
+            data_root=config.data_root,
             output_dir=config.feature_dir,
-            clip_length=config.clip_length_frames,
-            temporal_stride=config.temporal_stride,
-            batch_size=4,  # Small batch for feature extraction
-            num_workers=2,
+            target_clips=config.num_clips_stage1,
         )
 
         if success:
@@ -88,11 +81,8 @@ def run_stage1_training(config, force_retrain=False):
 
     # Check if Stage 1 is already trained
     if os.path.exists(stage1_best_path) and not force_retrain:
-        print(f"Found existing Stage 1 checkpoint: {stage1_best_path}")
-        response = input("Skip Stage 1 training? (y/n): ").strip().lower()
-        if response == "y":
-            print("Skipping Stage 1 training...")
-            return stage1_best_path
+        print(f"Found existing Stage 1 checkpoint: {stage1_best_path}. Skipping training (use --force_retrain to retrain).")
+        return stage1_best_path
 
     print(f"Starting Stage 1 MIL training...")
     print(f"Feature directory: {config.feature_dir}")
@@ -154,11 +144,8 @@ def run_stage2_training(config, stage1_checkpoint_path, force_retrain=False):
 
     # Check if Stage 2 is already trained
     if os.path.exists(stage2_best_path) and not force_retrain:
-        print(f"Found existing Stage 2 checkpoint: {stage2_best_path}")
-        response = input("Skip Stage 2 training? (y/n): ").strip().lower()
-        if response == "y":
-            print("Skipping Stage 2 training...")
-            return stage2_best_path
+        print(f"Found existing Stage 2 checkpoint: {stage2_best_path}. Skipping training (use --force_retrain to retrain).")
+        return stage2_best_path
 
     print(f"Starting Stage 2 pseudo-label training...")
     print(f"Stage 1 checkpoint: {stage1_checkpoint_path}")
