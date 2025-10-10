@@ -3,6 +3,7 @@ Training script cho Stage 2: Pseudo-label training với variable-length sequenc
 Follow paper 2209.11477v1 - cross-entropy loss với frozen encoder
 """
 
+import math
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -74,6 +75,9 @@ class Stage2Trainer(R3D_MTN_Trainer):
         self.best_auc = 0.0
         self.best_epoch = 0
 
+        # Runtime diagnostics for pseudo labels
+        self._pseudo_label_stats = None
+
         # Count trainable parameters
         trainable_params_count = sum(
             p.numel() for p in self.model.parameters() if p.requires_grad
@@ -84,6 +88,15 @@ class Stage2Trainer(R3D_MTN_Trainer):
         print(f"Total parameters: {total_params_count:,}")
         print(f"Trainable parameters: {trainable_params_count:,}")
         print(f"Frozen parameters: {total_params_count - trainable_params_count:,}")
+        if getattr(self.model, "feature_extract_mode", False):
+            print(
+                "Stage 2 is running in feature-extract mode – only the classification "
+                "head is trainable, so checkpoints will just contain that small head."
+            )
+            print(
+                "Expect checkpoint sizes in the tens of KB; this is normal when "
+                "training with pre-extracted features."
+            )
 
     def _load_stage1_model(self, checkpoint_path):
         """Load Stage 1 model cho pseudo-label generation"""
@@ -149,17 +162,65 @@ class Stage2Trainer(R3D_MTN_Trainer):
                 top_k=self.config.pseudo_label_top_k,
             )
 
-            # Convert back to tensor
-            pseudo_labels_tensor = (
-                torch.from_numpy(pseudo_labels).long().to(self.device)
-            )
+            # Convert back to tensor and keep diagnostics before casting
+            pseudo_labels_tensor = torch.from_numpy(pseudo_labels)
+            self._update_pseudo_label_stats(pseudo_labels_tensor)
+            if pseudo_labels_tensor.dtype != torch.long:
+                pseudo_labels_tensor = pseudo_labels_tensor.long()
+            pseudo_labels_tensor = pseudo_labels_tensor.to(self.device)
             pseudo_labels_batch.append(pseudo_labels_tensor)
 
         return pseudo_labels_batch
 
+    def _reset_pseudo_label_stats(self):
+        """Reset running statistics for pseudo labels."""
+        self._pseudo_label_stats = {
+            "clip_count": 0,
+            "sum": 0.0,
+            "min": math.inf,
+            "max": -math.inf,
+            "batches": 0,
+        }
+
+    def _update_pseudo_label_stats(self, pseudo_labels_tensor: torch.Tensor):
+        """Update statistics with the latest pseudo labels."""
+
+        if self._pseudo_label_stats is None:
+            self._reset_pseudo_label_stats()
+
+        values = pseudo_labels_tensor.float().flatten()
+        if values.numel() == 0:
+            return
+
+        stats = self._pseudo_label_stats
+        stats["clip_count"] += values.numel()
+        stats["sum"] += values.sum().item()
+        stats["min"] = min(stats["min"], values.min().item())
+        stats["max"] = max(stats["max"], values.max().item())
+        stats["batches"] += 1
+
+    def _log_pseudo_label_stats(self, prefix: str):
+        """Print aggregated pseudo label statistics for diagnostics."""
+
+        stats = self._pseudo_label_stats
+        if not stats or stats["clip_count"] == 0:
+            return
+
+        avg = stats["sum"] / stats["clip_count"]
+        min_val = stats["min"] if math.isfinite(stats["min"]) else float("nan")
+        max_val = stats["max"] if math.isfinite(stats["max"]) else float("nan")
+
+        print(
+            f"{prefix} pseudo-label stats: clips={stats['clip_count']}, "
+            f"batches={stats['batches']}, mean={avg:.4f}, min={min_val:.4f}, "
+            f"max={max_val:.4f}"
+        )
+
     def train_epoch(self, train_loader, epoch):
         """Train một epoch"""
         self.model.train()
+
+        self._reset_pseudo_label_stats()
 
         total_loss = 0.0
         total_accuracy = 0.0
@@ -255,11 +316,15 @@ class Stage2Trainer(R3D_MTN_Trainer):
         avg_loss = total_loss / num_batches
         avg_accuracy = total_accuracy / num_batches
 
+        self._log_pseudo_label_stats(f"Epoch {epoch} train")
+
         return {"loss": avg_loss, "accuracy": avg_accuracy}
 
     def evaluate(self, test_loader):
         """Evaluate model trên test set"""
         self.model.eval()
+
+        self._reset_pseudo_label_stats()
 
         all_video_scores = []
         all_video_labels = []
@@ -347,6 +412,8 @@ class Stage2Trainer(R3D_MTN_Trainer):
 
         avg_loss = total_loss / num_batches
 
+        self._log_pseudo_label_stats("Evaluation")
+
         return {
             "loss": avg_loss,
             "auc": all_metrics.get("video_auc_roc", 0.0),
@@ -373,6 +440,15 @@ class Stage2Trainer(R3D_MTN_Trainer):
         # Save latest checkpoint
         latest_path = os.path.join(checkpoint_dir, "stage2_latest.pth")
         torch.save(checkpoint, latest_path)
+        latest_size_kb = os.path.getsize(latest_path) / 1024
+        print(
+            f"Saved latest checkpoint to {latest_path} ({latest_size_kb:.1f} KB)"
+        )
+        if latest_size_kb < 512 and getattr(self.model, "feature_extract_mode", False):
+            print(
+                "Checkpoint remains small because only the lightweight classification "
+                "head is being updated in feature-extract mode."
+            )
 
         # Save best checkpoint
         if metrics["auc"] > self.best_auc:
@@ -381,6 +457,8 @@ class Stage2Trainer(R3D_MTN_Trainer):
             best_path = os.path.join(checkpoint_dir, "stage2_best.pth")
             torch.save(checkpoint, best_path)
             print(f"New best AUC: {self.best_auc:.4f} at epoch {epoch}")
+            best_size_kb = os.path.getsize(best_path) / 1024
+            print(f"Best checkpoint size: {best_size_kb:.1f} KB")
 
     def load_checkpoint(self, checkpoint_path):
         """Load model checkpoint"""
