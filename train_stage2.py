@@ -433,6 +433,10 @@ class Stage2Trainer(R3D_MTN_Trainer):
 
 
 def main():
+    default_stage1_checkpoint = os.path.join(
+        Config().checkpoint_dir, "stage1_best.pth"
+    )
+
     parser = argparse.ArgumentParser(description="Stage 2 Pseudo-label Training")
     parser.add_argument(
         "--feature_dir",
@@ -449,7 +453,7 @@ def main():
     parser.add_argument(
         "--stage1_checkpoint",
         type=str,
-        required=True,
+        default=default_stage1_checkpoint,
         help="Path to Stage 1 best checkpoint",
     )
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size")
@@ -472,21 +476,26 @@ def main():
 
     args = parser.parse_args()
 
+    # Create config
+    config = Config()
+    # Resolve Stage 1 checkpoint path after config overrides
+    stage1_checkpoint = args.stage1_checkpoint or os.path.join(
+        config.checkpoint_dir, "stage1_best.pth"
+    )
+
     # Validate Stage 1 checkpoint
-    if not os.path.exists(args.stage1_checkpoint):
-        print(f"Error: Stage 1 checkpoint not found: {args.stage1_checkpoint}")
+    if not os.path.exists(stage1_checkpoint):
+        print(f"Error: Stage 1 checkpoint not found: {stage1_checkpoint}")
         print("Please train Stage 1 first or provide correct path")
         return
 
-    # Create config
-    config = Config()
     config.learning_rate_stage2 = args.learning_rate
     config.batch_size = args.batch_size
 
     print(f"Stage 2 Training Configuration:")
     print(f"Feature directory: {args.feature_dir}")
     print(f"Data root: {args.data_root}")
-    print(f"Stage 1 checkpoint: {args.stage1_checkpoint}")
+    print(f"Stage 1 checkpoint: {stage1_checkpoint}")
     print(f"Batch size: {args.batch_size}")
     print(f"Number epochs: {args.num_epochs}")
     print(f"Learning rate: {args.learning_rate}")
@@ -508,7 +517,7 @@ def main():
     print(f"Test batches: {len(test_loader)}")
 
     # Create trainer
-    trainer = Stage2Trainer(config, args.stage1_checkpoint)
+    trainer = Stage2Trainer(config, stage1_checkpoint)
 
     # Start training
     trainer.train(
