@@ -88,6 +88,15 @@ class Stage2Trainer(R3D_MTN_Trainer):
         print(f"Total parameters: {total_params_count:,}")
         print(f"Trainable parameters: {trainable_params_count:,}")
         print(f"Frozen parameters: {total_params_count - trainable_params_count:,}")
+        if getattr(self.model, "feature_extract_mode", False):
+            print(
+                "Stage 2 is running in feature-extract mode – only the classification "
+                "head is trainable, so checkpoints will just contain that small head."
+            )
+            print(
+                "Expect checkpoint sizes in the tens of KB; this is normal when "
+                "training with pre-extracted features."
+            )
 
     def _load_stage1_model(self, checkpoint_path):
         """Load Stage 1 model cho pseudo-label generation"""
@@ -431,6 +440,15 @@ class Stage2Trainer(R3D_MTN_Trainer):
         # Save latest checkpoint
         latest_path = os.path.join(checkpoint_dir, "stage2_latest.pth")
         torch.save(checkpoint, latest_path)
+        latest_size_kb = os.path.getsize(latest_path) / 1024
+        print(
+            f"Saved latest checkpoint to {latest_path} ({latest_size_kb:.1f} KB)"
+        )
+        if latest_size_kb < 512 and getattr(self.model, "feature_extract_mode", False):
+            print(
+                "Checkpoint remains small because only the lightweight classification "
+                "head is being updated in feature-extract mode."
+            )
 
         # Save best checkpoint
         if metrics["auc"] > self.best_auc:
@@ -439,6 +457,8 @@ class Stage2Trainer(R3D_MTN_Trainer):
             best_path = os.path.join(checkpoint_dir, "stage2_best.pth")
             torch.save(checkpoint, best_path)
             print(f"New best AUC: {self.best_auc:.4f} at epoch {epoch}")
+            best_size_kb = os.path.getsize(best_path) / 1024
+            print(f"Best checkpoint size: {best_size_kb:.1f} KB")
 
     def load_checkpoint(self, checkpoint_path):
         """Load model checkpoint"""
