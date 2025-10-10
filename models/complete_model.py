@@ -330,9 +330,7 @@ class CompleteModel(nn.Module):
         self.feature_extract_mode = feature_extract_mode
 
         if feature_extract_mode:
-            # For feature-based training, we only need a classifier
-            # Assuming input features are 2048-dimensional (from I3D)
-            self.classifier = nn.Linear(2048, num_classes)
+            self.classifier = nn.Linear(1024, num_classes)
         else:
             # Full model with backbone (for future use)
             self.backbone = R2Plus1DBackbone(pretrained=pretrained)
