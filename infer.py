@@ -101,6 +101,13 @@ class FightDetector:
         """
         start_time = time.time()
         
+        # Get video duration and FPS for timestamp calculation
+        cap = cv2.VideoCapture(video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        duration = frame_count / fps if fps > 0 else 0
+        cap.release()
+        
         # Extract features
         features = self.extract_video_features(video_path)
         
@@ -123,30 +130,67 @@ class FightDetector:
             # Clip-level predictions
             clip_predictions = (anomaly_scores > threshold).int().cpu().numpy()
             clip_scores = anomaly_scores.cpu().numpy()
+            
+            # Get top 5 clips with highest scores
+            top5_indices = np.argsort(clip_scores)[-5:][::-1]  # Top 5 indices
+            top5_clips = []
+            for i, idx in enumerate(top5_indices):
+                # Calculate exact timestamps for this clip
+                clip_start_time = (idx / 32) * duration  # Start time in seconds
+                clip_end_time = ((idx + 1) / 32) * duration  # End time in seconds
+                clip_start_frame = int((idx / 32) * frame_count)  # Start frame
+                clip_end_frame = int(((idx + 1) / 32) * frame_count)  # End frame
+                
+                # Format timestamps
+                start_min, start_sec = divmod(clip_start_time, 60)
+                end_min, end_sec = divmod(clip_end_time, 60)
+                
+                top5_clips.append({
+                    'rank': i + 1,
+                    'clip_index': int(idx + 1),  # 1-based indexing
+                    'score': float(clip_scores[idx]),
+                    'prediction': 'FIGHT' if clip_scores[idx] > threshold else 'NO-FIGHT',
+                    'start_time_sec': float(clip_start_time),
+                    'end_time_sec': float(clip_end_time),
+                    'start_time_formatted': f"{int(start_min):02d}:{start_sec:05.2f}",
+                    'end_time_formatted': f"{int(end_min):02d}:{end_sec:05.2f}", 
+                    'time_range': f"{int(start_min):02d}:{start_sec:05.2f} - {int(end_min):02d}:{end_sec:05.2f}",
+                    'start_frame': int(clip_start_frame),
+                    'end_frame': int(clip_end_frame),
+                    'frame_range': f"{clip_start_frame}-{clip_end_frame}",
+                    'position_percent': f"{(idx / 32) * 100:.1f}%",
+                })
         
         inference_time = time.time() - start_time
         
         # Prepare results
         results = {
             'video_path': video_path,
+            'video_duration': duration,
+            'video_fps': fps,
+            'video_frames': frame_count,
             'video_score': video_score,
             'video_prediction': video_prediction,
             'video_label': 'FIGHT' if video_prediction == 1 else 'NO-FIGHT',
             'clip_scores': clip_scores,
             'clip_predictions': clip_predictions,
+            'top5_clips': top5_clips,  # Enhanced with timestamps
             'threshold': threshold,
             'inference_time': inference_time,
             'num_clips': len(clip_scores)
         }
         
         return results
-    
+
     def print_results(self, results):
         """Print prediction results in a nice format"""
         print("\n" + "="*60)
         print("🥊 FIGHT DETECTION RESULTS")
         print("="*60)
         print(f"Video: {os.path.basename(results['video_path'])}")
+        print(f"Duration: {results['video_duration']:.2f}s ({results['video_duration']/60:.1f} min)")
+        print(f"FPS: {results['video_fps']:.1f}")
+        print(f"Total frames: {results['video_frames']}")
         print(f"Prediction: {results['video_label']}")
         print(f"Confidence: {results['video_score']:.4f}")
         print(f"Threshold: {results['threshold']}")
@@ -157,16 +201,23 @@ class FightDetector:
         fight_clips = np.sum(results['clip_predictions'])
         print(f"Fight clips: {fight_clips}/{results['num_clips']} ({fight_clips/results['num_clips']*100:.1f}%)")
         
-        # Show top 5 most suspicious clips
-        top_indices = np.argsort(results['clip_scores'])[-5:][::-1]
-        print(f"\nTop 5 most suspicious clips:")
-        for i, idx in enumerate(top_indices):
-            print(f"  {i+1}. Clip {idx+1}: {results['clip_scores'][idx]:.4f}")
+        # Show top 5 most suspicious clips with detailed timestamps
+        print(f"\n📊 Top 5 most suspicious clips:")
+        print("-" * 80)
+        print("Rank | Clip | Score  | Prediction | Time Range       | Frames      | Position")
+        print("-" * 80)
+        for clip in results['top5_clips']:
+            print(f"#{clip['rank']:2d}   | {clip['clip_index']:2d}   | "
+                  f"{clip['score']:6.4f} | {clip['prediction']:9s} | "
+                  f"{clip['time_range']:15s} | {clip['frame_range']:10s} | "
+                  f"{clip['position_percent']:6s}")
         
+        print("-" * 80)
+        print("💡 Tip: Use these timestamps to jump directly to suspicious scenes!")
         print("="*60)
     
     def save_results(self, results, output_path):
-        """Save results to file"""
+        """Save results to file with top 5 clips"""
         import json
         
         # Convert numpy arrays to lists for JSON serialization
@@ -174,10 +225,35 @@ class FightDetector:
         save_results['clip_scores'] = save_results['clip_scores'].tolist()
         save_results['clip_predictions'] = save_results['clip_predictions'].tolist()
         
+        # Save detailed JSON
         with open(output_path, 'w') as f:
             json.dump(save_results, f, indent=2)
         
+        # Also save a readable text summary
+        txt_path = output_path.replace('.json', '.txt')
+        with open(txt_path, 'w', encoding='utf-8') as f:
+            f.write("🥊 FIGHT DETECTION RESULTS\n")
+            f.write("="*60 + "\n")
+            f.write(f"Video: {os.path.basename(results['video_path'])}\n")
+            f.write(f"Prediction: {results['video_label']}\n") 
+            f.write(f"Confidence: {results['video_score']:.4f}\n")
+            f.write(f"Threshold: {results['threshold']}\n")
+            f.write(f"Inference time: {results['inference_time']:.2f}s\n")
+            f.write(f"Number of clips: {results['num_clips']}\n\n")
+            
+            fight_clips = np.sum(results['clip_predictions'])
+            f.write(f"Fight clips: {fight_clips}/{results['num_clips']} ({fight_clips/results['num_clips']*100:.1f}%)\n\n")
+            
+            f.write("📊 Top 5 most suspicious clips:\n")
+            f.write("-" * 50 + "\n")
+            for clip in results['top5_clips']:
+                f.write(f"#{clip['rank']} - Clip {clip['clip_index']:2d} | "
+                       f"Score: {clip['score']:.4f} | "
+                       f"Prediction: {clip['prediction']:8s} | "
+                       f"Position: {clip['timestamp_start']}\n")
+        
         print(f"Results saved to: {output_path}")
+        print(f"Summary saved to: {txt_path}")
 
 
 def main():
@@ -185,7 +261,7 @@ def main():
     parser.add_argument(
         "--video_path",
         type=str,
-        default="test1.mp4",
+        default="test.mp4",
         help="Path to input video file"
     )
     parser.add_argument(

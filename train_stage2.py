@@ -207,6 +207,18 @@ class Stage2Trainer(R3D_MTN_Trainer):
 
                 clip_logits = clip_logits.squeeze(0)  # (M, num_classes)
 
+                # Debug: Check shapes and types
+                print(f"DEBUG - clip_logits shape: {clip_logits.shape}, dtype: {clip_logits.dtype}")
+                print(f"DEBUG - pseudo_labels shape: {pseudo_labels.shape}, dtype: {pseudo_labels.dtype}")
+                print(f"DEBUG - clip_logits range: [{clip_logits.min().item():.4f}, {clip_logits.max().item():.4f}]")
+                print(f"DEBUG - pseudo_labels unique values: {torch.unique(pseudo_labels)}")
+                
+                # Check if clip_logits contains NaN or Inf
+                if torch.isnan(clip_logits).any():
+                    print("WARNING: clip_logits contains NaN!")
+                if torch.isinf(clip_logits).any():
+                    print("WARNING: clip_logits contains Inf!")
+
                 # Cross-entropy loss
                 loss = self.criterion(clip_logits, pseudo_labels)
                 batch_loss += loss
