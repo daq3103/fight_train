@@ -213,6 +213,17 @@ class Stage2Trainer(R3D_MTN_Trainer):
                 print(f"DEBUG - clip_logits range: [{clip_logits.min().item():.4f}, {clip_logits.max().item():.4f}]")
                 print(f"DEBUG - pseudo_labels unique values: {torch.unique(pseudo_labels)}")
                 
+                # Fix pseudo_labels shape - convert from [N, C] to [N] if needed
+                if pseudo_labels.dim() == 2 and pseudo_labels.size(1) == 2:
+                    # Convert from one-hot or probabilities to class indices
+                    if pseudo_labels.dtype == torch.int64:
+                        # One-hot: [0, 1] -> 1, [1, 0] -> 0
+                        pseudo_labels = torch.argmax(pseudo_labels, dim=1)
+                    else:
+                        # Probabilities: convert to class indices
+                        pseudo_labels = torch.argmax(pseudo_labels, dim=1).long()
+                    print(f"DEBUG - Fixed pseudo_labels shape: {pseudo_labels.shape}")
+                
                 # Check if clip_logits contains NaN or Inf
                 if torch.isnan(clip_logits).any():
                     print("WARNING: clip_logits contains NaN!")
