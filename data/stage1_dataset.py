@@ -43,6 +43,10 @@ class Stage1Dataset(Dataset):
         fight_count = sum(1 for item in self.video_data if item["label"] == 1)
         print(f"  Fight: {fight_count}, No-fight: {len(self.video_data) - fight_count}")
 
+        self.normal_videos = [v for v in self.video_data if v["label"] == 0]
+        self.abnormal_videos = [v for v in self.video_data if v["label"] == 1]
+        self.num_pairs = min(len(self.normal_videos), len(self.abnormal_videos))
+
     def _load_video_data(self) -> List[dict]:
         """Load video file paths và labels"""
         video_data = []
@@ -84,27 +88,27 @@ class Stage1Dataset(Dataset):
             )
 
         return video_data
+
     def __len__(self):
-        return len(self.video_data)
+        return self.num_pairs
 
     def __getitem__(self, idx):
-        """Simplified vì features đã có đúng shape (32, feature_dim)"""
-        video_info = self.video_data[idx]
+        normal_info = self.normal_videos[idx % len(self.normal_videos)]
+        abnormal_info = self.abnormal_videos[idx % len(self.abnormal_videos)]
 
-        try:
-            features = np.load(video_info["feature_file"])  
+        normal_features = torch.from_numpy(
+            np.load(normal_info["feature_file"])
+        ).float()
+        abnormal_features = torch.from_numpy(
+            np.load(abnormal_info["feature_file"])
+        ).float()
 
-
-            features_tensor = torch.from_numpy(features).float()
-            label_tensor = torch.tensor(video_info["label"], dtype=torch.long) 
-
-            return features_tensor, label_tensor
-
-        except Exception as e:
-            print(f"Error loading {video_info['video_name']}: {str(e)}")
-            dummy_features = torch.zeros(self.target_clips, self.feature_dim)
-            dummy_label = torch.tensor(0, dtype=torch.long)
-            return dummy_features, dummy_label
+        return {
+            "normal_features": normal_features,
+            "abnormal_features": abnormal_features,
+            "normal_name": normal_info["video_name"],
+            "abnormal_name": abnormal_info["video_name"],
+        }
 
 
 def create_stage1_dataloaders(
@@ -159,14 +163,12 @@ def create_stage1_dataloaders(
 
 
 if __name__ == "__main__":
-    # Test Stage 1 dataset
     feature_dir = "./features_i3d"
     data_root = "./new_youtube"
 
     if os.path.exists(feature_dir):
         print("Testing Stage 1 Dataset...")
 
-        # Create dataset
         dataset = Stage1Dataset(
             feature_dir=feature_dir,
             data_root=data_root,
@@ -176,12 +178,11 @@ if __name__ == "__main__":
         )
 
         if len(dataset) > 0:
-            # Test single sample
-            features, label = dataset[0]
-            print(f"Features shape: {features.shape}")  # Should be (32, 1024)
-            print(f"Label: {label}")
+            sample = dataset[0]
+            print(f"Sample keys: {list(sample.keys())}")
+            print(f"Normal shape: {sample['normal_features'].shape}")
+            print(f"Abnormal shape: {sample['abnormal_features'].shape}")
 
-            # Test dataloader
             train_loader, test_loader = create_stage1_dataloaders(
                 feature_dir=feature_dir,
                 data_root=data_root,
@@ -192,11 +193,9 @@ if __name__ == "__main__":
             print(f"Train batches: {len(train_loader)}")
             print(f"Test batches: {len(test_loader)}")
 
-            # Test batch
-            for features_batch, labels_batch in train_loader:
-                print(f"Batch features: {features_batch.shape}")  # (B, 32, 1024)
-                print(f"Batch labels: {labels_batch.shape}")  # (B,)
-                break
+            batch = next(iter(train_loader))
+            print(f"Batch normal: {batch['normal_features'].shape}")
+            print(f"Batch abnormal: {batch['abnormal_features'].shape}")
         else:
             print("No data found in dataset")
     else:
