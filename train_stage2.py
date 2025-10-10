@@ -207,12 +207,6 @@ class Stage2Trainer(R3D_MTN_Trainer):
 
                 clip_logits = clip_logits.squeeze(0)  # (M, num_classes)
 
-                # Debug: Check shapes and types
-                print(f"DEBUG - clip_logits shape: {clip_logits.shape}, dtype: {clip_logits.dtype}")
-                print(f"DEBUG - pseudo_labels shape: {pseudo_labels.shape}, dtype: {pseudo_labels.dtype}")
-                print(f"DEBUG - clip_logits range: [{clip_logits.min().item():.4f}, {clip_logits.max().item():.4f}]")
-                print(f"DEBUG - pseudo_labels unique values: {torch.unique(pseudo_labels)}")
-                
                 # Fix pseudo_labels shape - convert from [N, C] to [N] if needed
                 if pseudo_labels.dim() == 2 and pseudo_labels.size(1) == 2:
                     # Convert from one-hot or probabilities to class indices
@@ -222,13 +216,6 @@ class Stage2Trainer(R3D_MTN_Trainer):
                     else:
                         # Probabilities: convert to class indices
                         pseudo_labels = torch.argmax(pseudo_labels, dim=1).long()
-                    print(f"DEBUG - Fixed pseudo_labels shape: {pseudo_labels.shape}")
-                
-                # Check if clip_logits contains NaN or Inf
-                if torch.isnan(clip_logits).any():
-                    print("WARNING: clip_logits contains NaN!")
-                if torch.isinf(clip_logits).any():
-                    print("WARNING: clip_logits contains Inf!")
 
                 # Cross-entropy loss
                 loss = self.criterion(clip_logits, pseudo_labels)
@@ -312,6 +299,17 @@ class Stage2Trainer(R3D_MTN_Trainer):
 
                     if clip_logits is not None:
                         clip_logits = clip_logits.squeeze(0)
+                        
+                        # Fix pseudo_labels shape - convert from [N, C] to [N] if needed
+                        if pseudo_labels.dim() == 2 and pseudo_labels.size(1) == 2:
+                            # Convert from one-hot or probabilities to class indices
+                            if pseudo_labels.dtype == torch.int64:
+                                # One-hot: [0, 1] -> 1, [1, 0] -> 0
+                                pseudo_labels = torch.argmax(pseudo_labels, dim=1)
+                            else:
+                                # Probabilities: convert to class indices
+                                pseudo_labels = torch.argmax(pseudo_labels, dim=1).long()
+                        
                         loss = self.criterion(clip_logits, pseudo_labels)
                         batch_loss += loss
 
