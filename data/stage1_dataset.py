@@ -84,35 +84,6 @@ class Stage1Dataset(Dataset):
             )
 
         return video_data
-
-    def _uniform_grouping_average(self, features: np.ndarray) -> np.ndarray:
-
-        M, feature_dim = features.shape
-
-        if M == self.target_clips:
-            return features
-        elif M < self.target_clips:
-            indices = np.linspace(0, M - 1, self.target_clips).astype(int)
-            return features[indices]
-        else:
-            # Downsample by grouping và averaging
-            normalized_features = np.zeros((self.target_clips, feature_dim)) # (32, 1024) 
-
-            group_size = M / self.target_clips
-
-            for i in range(self.target_clips):
-                start_idx = int(i * group_size)
-                end_idx = int((i + 1) * group_size)
-
-                # Average features trong group
-                if end_idx <= M: 
-                    group_features = features[start_idx:end_idx]
-                else:
-                    group_features = features[start_idx:]
-
-                normalized_features[i] = np.mean(group_features, axis=0)
-            return normalized_features
-
     def __len__(self):
         return len(self.video_data)
 
@@ -121,14 +92,11 @@ class Stage1Dataset(Dataset):
         video_info = self.video_data[idx]
 
         try:
-            # Load features (đã có shape (32, feature_dim))
-            features = np.load(video_info["feature_file"])  # (32, 1024)
+            features = np.load(video_info["feature_file"])  
 
-            # Không cần _uniform_grouping_average nữa!
-            # Paper method đã đảm bảo đúng shape
 
             features_tensor = torch.from_numpy(features).float()
-            label_tensor = torch.tensor(video_info["label"], dtype=torch.long)
+            label_tensor = torch.tensor(video_info["label"], dtype=torch.long) 
 
             return features_tensor, label_tensor
 
@@ -233,4 +201,3 @@ if __name__ == "__main__":
             print("No data found in dataset")
     else:
         print(f"Feature directory not found: {feature_dir}")
-        print("Please run extract_i3d_features.py first")

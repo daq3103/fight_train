@@ -415,7 +415,6 @@ def main():
         feature_dir=args.feature_dir,
         data_root=args.data_root,
         batch_size=args.batch_size,
-        num_clips=config.num_clips_stage1,
         feature_dim=config.feature_dim,
         num_workers=args.num_workers,
     )
