@@ -3,6 +3,7 @@ Training script cho Stage 2: Pseudo-label training với variable-length sequenc
 Follow paper 2209.11477v1 - cross-entropy loss với frozen encoder
 """
 
+import math
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -73,6 +74,9 @@ class Stage2Trainer(R3D_MTN_Trainer):
         # Best scores tracking
         self.best_auc = 0.0
         self.best_epoch = 0
+
+        # Runtime diagnostics for pseudo labels
+        self._pseudo_label_stats = None
 
         # Count trainable parameters
         trainable_params_count = sum(
@@ -149,17 +153,65 @@ class Stage2Trainer(R3D_MTN_Trainer):
                 top_k=self.config.pseudo_label_top_k,
             )
 
-            # Convert back to tensor
-            pseudo_labels_tensor = (
-                torch.from_numpy(pseudo_labels).long().to(self.device)
-            )
+            # Convert back to tensor and keep diagnostics before casting
+            pseudo_labels_tensor = torch.from_numpy(pseudo_labels)
+            self._update_pseudo_label_stats(pseudo_labels_tensor)
+            if pseudo_labels_tensor.dtype != torch.long:
+                pseudo_labels_tensor = pseudo_labels_tensor.long()
+            pseudo_labels_tensor = pseudo_labels_tensor.to(self.device)
             pseudo_labels_batch.append(pseudo_labels_tensor)
 
         return pseudo_labels_batch
 
+    def _reset_pseudo_label_stats(self):
+        """Reset running statistics for pseudo labels."""
+        self._pseudo_label_stats = {
+            "clip_count": 0,
+            "sum": 0.0,
+            "min": math.inf,
+            "max": -math.inf,
+            "batches": 0,
+        }
+
+    def _update_pseudo_label_stats(self, pseudo_labels_tensor: torch.Tensor):
+        """Update statistics with the latest pseudo labels."""
+
+        if self._pseudo_label_stats is None:
+            self._reset_pseudo_label_stats()
+
+        values = pseudo_labels_tensor.float().flatten()
+        if values.numel() == 0:
+            return
+
+        stats = self._pseudo_label_stats
+        stats["clip_count"] += values.numel()
+        stats["sum"] += values.sum().item()
+        stats["min"] = min(stats["min"], values.min().item())
+        stats["max"] = max(stats["max"], values.max().item())
+        stats["batches"] += 1
+
+    def _log_pseudo_label_stats(self, prefix: str):
+        """Print aggregated pseudo label statistics for diagnostics."""
+
+        stats = self._pseudo_label_stats
+        if not stats or stats["clip_count"] == 0:
+            return
+
+        avg = stats["sum"] / stats["clip_count"]
+        min_val = stats["min"] if math.isfinite(stats["min"]) else float("nan")
+        max_val = stats["max"] if math.isfinite(stats["max"]) else float("nan")
+
+        print(
+            f"{prefix} pseudo-label stats: clips={stats['clip_count']}, "
+            f"batches={stats['batches']}, mean={avg:.4f}, min={min_val:.4f}, "
+            f"max={max_val:.4f}"
+        )
+
     def train_epoch(self, train_loader, epoch):
         """Train một epoch"""
         self.model.train()
+
+        self._reset_pseudo_label_stats()
 
         total_loss = 0.0
         total_accuracy = 0.0
@@ -255,11 +307,15 @@ class Stage2Trainer(R3D_MTN_Trainer):
         avg_loss = total_loss / num_batches
         avg_accuracy = total_accuracy / num_batches
 
+        self._log_pseudo_label_stats(f"Epoch {epoch} train")
+
         return {"loss": avg_loss, "accuracy": avg_accuracy}
 
     def evaluate(self, test_loader):
         """Evaluate model trên test set"""
         self.model.eval()
+
+        self._reset_pseudo_label_stats()
 
         all_video_scores = []
         all_video_labels = []
@@ -346,6 +402,8 @@ class Stage2Trainer(R3D_MTN_Trainer):
         all_metrics = metrics.compute_all_metrics(threshold=0.5)
 
         avg_loss = total_loss / num_batches
+
+        self._log_pseudo_label_stats("Evaluation")
 
         return {
             "loss": avg_loss,

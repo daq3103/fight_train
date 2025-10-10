@@ -291,18 +291,36 @@ class PseudoLabelGenerator:
             # Assume model returns clip-level scores
             model_outputs = self.stage1_model(features_tensor)
 
-            if isinstance(model_outputs, dict):
-                clip_scores = model_outputs.get(
-                    "clip_scores", model_outputs.get("anomaly_scores")
-                )
-            else:
-                clip_scores = model_outputs
+            clip_scores_tensor = None
 
-            if clip_scores is None:
+            if isinstance(model_outputs, dict):
+                # Prefer explicit logits if available
+                clip_logits = None
+                for key in ["clip_logits", "logits"]:
+                    if key in model_outputs and model_outputs[key] is not None:
+                        clip_logits = model_outputs[key]
+                        break
+
+                if clip_logits is not None:
+                    clip_scores_tensor = torch.softmax(clip_logits, dim=-1)[..., 1]
+                elif model_outputs.get("clip_scores") is not None:
+                    clip_scores_tensor = model_outputs["clip_scores"].squeeze(0)
+                elif model_outputs.get("anomaly_scores") is not None:
+                    clip_scores_tensor = model_outputs["anomaly_scores"].squeeze(0)
+            else:
+                clip_logits = model_outputs
+                clip_scores_tensor = torch.softmax(clip_logits, dim=-1)[..., 1]
+
+            if clip_scores_tensor is None:
                 # Fallback: uniform pseudo labels
                 return self._uniform_pseudo_labels(features.shape[0], video_label)
 
-            clip_scores = clip_scores.squeeze(0).cpu().numpy()  # (M,)
+            # Ensure 1D tensor of fight probabilities (M,)
+            clip_scores_tensor = clip_scores_tensor.squeeze()
+            if clip_scores_tensor.dim() == 0:
+                clip_scores_tensor = clip_scores_tensor.unsqueeze(0)
+
+            clip_scores = clip_scores_tensor.detach().cpu().numpy()
 
             if self.strategy == "threshold":
                 pseudo_labels = (clip_scores > threshold).astype(int)
