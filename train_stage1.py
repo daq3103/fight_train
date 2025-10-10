@@ -61,6 +61,30 @@ class Stage1Trainer(R3D_MTN_Trainer):
         print(f"Stage 1 Trainer initialized on {self.device}")
         print(f"Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
 
+    def _extract_anomaly_scores(self, outputs: torch.Tensor | dict) -> torch.Tensor:
+        """Convert model outputs to (B, N) anomaly score tensor."""
+
+        if isinstance(outputs, dict):
+            if "anomaly_scores" in outputs:
+                scores = outputs["anomaly_scores"]
+            elif "video_score" in outputs:
+                scores = outputs["video_score"]
+            else:
+                raise KeyError("Model output dict missing 'anomaly_scores' or 'video_score'")
+        else:
+            probs = torch.softmax(outputs, dim=-1)
+            if probs.dim() == 3:  # (B, N, num_classes)
+                scores = probs[..., 1]
+            elif probs.dim() == 2:  # (B, num_classes)
+                scores = probs[:, 1]
+            else:
+                raise ValueError(f"Unexpected output tensor shape: {probs.shape}")
+
+        if scores.dim() == 1:  # (B,) -> (B, 1)
+            scores = scores.unsqueeze(1)
+
+        return scores
+
     def _ranking_loss(self, normal_scores, abnormal_scores, margin=1.0):
         """
         Ranking loss - abnormal scores phải > normal scores
@@ -131,8 +155,8 @@ class Stage1Trainer(R3D_MTN_Trainer):
             normal_outputs = self.model(normal_features)
             abnormal_outputs = self.model(abnormal_features)
 
-            normal_scores = normal_outputs["anomaly_scores"]  # (B, N)
-            abnormal_scores = abnormal_outputs["anomaly_scores"]  # (B, N)
+            normal_scores = self._extract_anomaly_scores(normal_outputs)
+            abnormal_scores = self._extract_anomaly_scores(abnormal_outputs)
 
             # Compute losses
             ranking_loss = self._ranking_loss(normal_scores, abnormal_scores)
@@ -207,37 +231,11 @@ class Stage1Trainer(R3D_MTN_Trainer):
                 normal_outputs = self.model(normal_features)
                 abnormal_outputs = self.model(abnormal_features)
 
-                # Extract outputs based on CompleteModel structure
-                if isinstance(normal_outputs, dict):
-                    normal_scores = normal_outputs.get(
-                        "video_score",
-                        torch.max(
-                            normal_outputs.get("anomaly_scores", normal_outputs), dim=-1
-                        )[0],
-                    )
-                    abnormal_scores = abnormal_outputs.get(
-                        "video_score",
-                        torch.max(
-                            abnormal_outputs.get("anomaly_scores", abnormal_outputs),
-                            dim=-1,
-                        )[0],
-                    )
-                else:
-                    # CompleteModel returns logits, convert to scores
-                    normal_probs = torch.softmax(normal_outputs, dim=-1)
-                    abnormal_probs = torch.softmax(abnormal_outputs, dim=-1)
-                    normal_scores = normal_probs[..., 1]  # Fight probability
-                    abnormal_scores = abnormal_probs[..., 1]  # Fight probability
-
-                    # If 3D tensor (B, T, num_classes), take max over time
-                    if normal_scores.dim() > 1:
-                        normal_scores = torch.max(normal_scores, dim=1)[0]
-                        abnormal_scores = torch.max(abnormal_scores, dim=1)[0]
+                normal_scores = self._extract_anomaly_scores(normal_outputs)
+                abnormal_scores = self._extract_anomaly_scores(abnormal_outputs)
 
                 # Compute loss for tracking
-                ranking_loss = self._ranking_loss(
-                    normal_scores.unsqueeze(1), abnormal_scores.unsqueeze(1)
-                )
+                ranking_loss = self._ranking_loss(normal_scores, abnormal_scores)
                 total_loss += ranking_loss.item()
                 num_batches += 1
 
@@ -246,7 +244,13 @@ class Stage1Trainer(R3D_MTN_Trainer):
 
                 # Create predictions dict
                 predictions = {
-                    "video_score": torch.cat([normal_scores, abnormal_scores], dim=0)
+                    "video_score": torch.cat(
+                        [
+                            torch.max(normal_scores, dim=1)[0],
+                            torch.max(abnormal_scores, dim=1)[0],
+                        ],
+                        dim=0,
+                    )
                 }
 
                 # Create targets dict
